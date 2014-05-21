@@ -152,11 +152,6 @@ namespace SmeshLink.Misty.Service.Channel
                 set { /* do nothing */ }
             }
 
-            public Stream GetResponseStream()
-            {
-                return _response.GetResponseStream();
-            }
-
             public NameValueCollection Headers
             {
                 get { return _response.Headers; }
@@ -165,6 +160,16 @@ namespace SmeshLink.Misty.Service.Channel
             public String Resource
             {
                 get { return _resource; }
+            }
+
+            public Stream GetResponseStream()
+            {
+                return _response.GetResponseStream();
+            }
+
+            public void AppendHeader(String name, String value)
+            {
+                throw new NotSupportedException();
             }
         }
     }

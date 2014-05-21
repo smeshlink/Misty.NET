@@ -42,6 +42,10 @@ namespace SmeshLink.Misty.Service
         /// </summary>
         Object Body { get; set; }
         /// <summary>
+        /// Appends a response header.
+        /// </summary>
+        void AppendHeader(String name, String value);
+        /// <summary>
         /// Gets the response stream.
         /// </summary>
         Stream GetResponseStream();
