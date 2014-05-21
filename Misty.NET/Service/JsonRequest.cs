@@ -42,6 +42,8 @@ namespace SmeshLink.Misty.Service
             _headersObj = jsonObj.Value<JObject>("headers");
             _params = jsonObj.Value<JObject>("params");
             _body = jsonObj["body"];
+            if (_body != null)
+                _bodyString = Newtonsoft.Json.JsonConvert.SerializeObject(_body);
         }
 
         /// <inheritdoc/>

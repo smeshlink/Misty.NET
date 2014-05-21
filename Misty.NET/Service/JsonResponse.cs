@@ -27,6 +27,7 @@ namespace SmeshLink.Misty.Service
         private Int32 _status;
         private String _resource;
         private Object _body;
+        private String _bodyString;
 
         /// <summary>
         /// </summary>
@@ -37,6 +38,8 @@ namespace SmeshLink.Misty.Service
             _resource = jsonObj.Value<String>("resource");
             _headersObj = jsonObj.Value<JObject>("headers");
             _body = jsonObj["body"];
+            if (_body != null)
+                _bodyString = Newtonsoft.Json.JsonConvert.SerializeObject(_body);
         }
 
         /// <inheritdoc/>
@@ -82,6 +85,13 @@ namespace SmeshLink.Misty.Service
         {
             get { return _body; }
             set { _body = value; }
+        }
+
+        /// <inheritdoc/>
+        public String BodyString
+        {
+            get { return _bodyString; }
+            set { _bodyString = value; }
         }
 
         /// <inheritdoc/>

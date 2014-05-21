@@ -318,7 +318,7 @@ namespace SmeshLink.Misty.Service
                 using (StringWriter writer = new StringWriter())
                 {
                     GetFormatter(request.Format).Format(writer, feed, FormatOption.All);
-                    request.Body = writer.ToString();
+                    request.BodyString = writer.ToString();
                 }
 
                 IServiceResponse response = null;
