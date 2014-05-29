@@ -13,6 +13,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -321,14 +322,31 @@ namespace SmeshLink.Misty.Service.Channel
                 WaitFuture<IServiceRequest, IServiceResponse> f = new WaitFuture<IServiceRequest, IServiceResponse>(request);
                 _channel._waitingRequests[request.Token] = f;
 
-                JsonFormatter.Instance.Format(_client.GetStream(), request);
+                try
+                {
+                    JsonFormatter.Instance.Format(_client.GetStream(), request);
+                }
+                catch (Exception e)
+                {
+                    _channel.RemoveWorker(this, e);
+                    WaitFuture<IServiceRequest, IServiceResponse> wf;
+                    _channel._waitingRequests.TryRemove(request.Token, out wf);
+                    f.Response = null;
+                }
 
                 return f;
             }
 
             private void Send(IServiceResponse response)
             {
-                JsonFormatter.Instance.Format(_client.GetStream(), response);
+                try
+                {
+                    JsonFormatter.Instance.Format(_client.GetStream(), response);
+                }
+                catch (Exception e)
+                {
+                    _channel.RemoveWorker(this, e);
+                }
             }
 
             public void Take()
