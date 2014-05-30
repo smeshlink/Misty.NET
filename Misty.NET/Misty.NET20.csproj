@@ -69,6 +69,7 @@
     <Compile Include="Service\QueryOption.cs" />
     <Compile Include="Service\ServiceException.cs" />
     <Compile Include="Service\UserCredential.cs" />
+    <Compile Include="Util\BlockingQueue.cs" />
     <Compile Include="Util\Buffer\AbstractIoBuffer.cs" />
     <Compile Include="Util\Buffer\Buffer.cs" />
     <Compile Include="Util\Buffer\BufferDataException.cs" />
@@ -84,8 +85,6 @@
     <Compile Include="Util\JsonUtils.cs" />
     <Compile Include="Util\PagedList.cs" />
     <Compile Include="Util\System.Collections.Concurrent\ConcurrentDictionary.cs" />
-    <Compile Include="Util\System.Collections.Concurrent\ConcurrentQueue.cs" />
-    <Compile Include="Util\System.Collections.Concurrent\IProducerConsumerCollection.cs" />
     <Compile Include="Util\System.Collections.Concurrent\SplitOrderedList.cs" />
     <Compile Include="Util\System\Funcs.cs" />
     <Compile Include="Util\WaitFuture.cs" />

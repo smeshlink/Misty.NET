@@ -13,7 +13,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.IO;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -153,7 +152,7 @@ namespace SmeshLink.Misty.Service.Channel
                     {
                         Worker w = new Worker(this);
                         _workerPool.Add(w);
-                        ThreadPool.QueueUserWorkItem(o => ((Worker)o).Run(), w);
+                        ThreadPool.QueueUserWorkItem(w.Run);
                     }
 
                     try
@@ -171,7 +170,8 @@ namespace SmeshLink.Misty.Service.Channel
 
         private void RemoveWorker(Worker w, Exception e)
         {
-            Console.WriteLine("Removing worker " + e.Message);
+            if (e != null)
+                Console.WriteLine("Removing worker " + e.Message);
 
             lock (_workerPool)
             {
@@ -222,19 +222,22 @@ namespace SmeshLink.Misty.Service.Channel
         class Worker : IDisposable
         {
             readonly TcpChannel _channel;
-            readonly Byte[] _byteBuffer = new Byte[1024];
-            readonly IoBuffer _ioBuffer = IoBuffer.Allocate(2048);
-            Int32 _counter;
+            readonly BlockingQueue<Object> _sendingQueue = new BlockingQueue<Object>();
             TcpClient _client;
             Boolean _free = true;
+            Boolean _disposed;
 
             public Worker(TcpChannel channel)
             {
                 _channel = channel;
-                _ioBuffer.AutoExpand = true;
             }
 
-            public void Run()
+            public Boolean Available
+            {
+                get { return _free && _client != null && _client.Client != null && _client.Connected; }
+            }
+
+            public void Run(Object state)
             {
                 for (; ; )
                 {
@@ -270,83 +273,8 @@ namespace SmeshLink.Misty.Service.Channel
                 _channel.Wakeup();
                 Free();
 
-                while (_client.Connected)
-                {
-                    try
-                    {
-                        Int32 bytesRead = Math.Min(_client.Available, _byteBuffer.Length);
-                        bytesRead = _client.Client.Receive(_byteBuffer, 0, bytesRead, SocketFlags.None);
-                        for (Int32 i = 0; i < bytesRead; i++)
-                        {
-                            _ioBuffer.Put(_byteBuffer[i]);
-
-                            if ('{' == _byteBuffer[i])
-                            {
-                                _counter++;
-                            }
-                            else if ('}' == _byteBuffer[i])
-                            {
-                                _counter--;
-
-                                if (_counter == 0)
-                                {
-                                    _ioBuffer.Flip();
-                                    ArraySegment<Byte> array = _ioBuffer.GetRemaining();
-                                    String json = Encoding.UTF8.GetString(array.Array, array.Offset, array.Count);
-                                    JObject jObj = ToJsonObject(json);
-
-                                    if (jObj["status"] != null)
-                                        ProcessResponse(new JsonResponse(jObj));
-                                    else if (jObj["method"] != null)
-                                        ProcessRequest(new JsonRequest(jObj));
-
-                                    _ioBuffer.Clear();
-                                }
-                            }
-                        }
-                    }
-                    catch (SocketException e)
-                    {
-                        _channel.RemoveWorker(this, e);
-                    }
-                    catch (Exception e)
-                    {
-                        // TODO log exception
-                        Console.WriteLine(e.Message);
-                    }
-                }
-            }
-
-            public WaitFuture<IServiceRequest, IServiceResponse> Send(IServiceRequest request)
-            {
-                WaitFuture<IServiceRequest, IServiceResponse> f = new WaitFuture<IServiceRequest, IServiceResponse>(request);
-                _channel._waitingRequests[request.Token] = f;
-
-                try
-                {
-                    JsonFormatter.Instance.Format(_client.GetStream(), request);
-                }
-                catch (Exception e)
-                {
-                    _channel.RemoveWorker(this, e);
-                    WaitFuture<IServiceRequest, IServiceResponse> wf;
-                    _channel._waitingRequests.TryRemove(request.Token, out wf);
-                    f.Response = null;
-                }
-
-                return f;
-            }
-
-            private void Send(IServiceResponse response)
-            {
-                try
-                {
-                    JsonFormatter.Instance.Format(_client.GetStream(), response);
-                }
-                catch (Exception e)
-                {
-                    _channel.RemoveWorker(this, e);
-                }
+                ThreadPool.QueueUserWorkItem(Sending, this);
+                ThreadPool.QueueUserWorkItem(Receiving, this);
             }
 
             public void Take()
@@ -360,9 +288,137 @@ namespace SmeshLink.Misty.Service.Channel
                 _channel.Wakeup();
             }
 
-            public Boolean Available
+            public void Dispose()
             {
-                get { return _free && _client != null && _client.Connected; }
+                if (!_disposed)
+                {
+                    if (_client != null)
+                        ((IDisposable)_client).Dispose();
+                    _disposed = true;
+                }
+            }
+
+            public WaitFuture<IServiceRequest, IServiceResponse> Send(IServiceRequest request)
+            {
+                WaitFuture<IServiceRequest, IServiceResponse> wf = new WaitFuture<IServiceRequest, IServiceResponse>(request);
+                _channel._waitingRequests[request.Token] = wf;
+                _sendingQueue.Enqueue(wf.Request);
+                return wf;
+            }
+
+            private static void Sending(Object state)
+            {
+                Worker worker = (Worker)state;
+                TcpClient client = worker._client;
+                BlockingQueue<Object> queue = worker._sendingQueue;
+                Object obj;
+
+                while (client.Client != null && client.Connected)
+                {
+                    try
+                    {
+                        obj = queue.Dequeue(3000);
+                    }
+                    catch (ThreadInterruptedException)
+                    {
+                        obj = null;
+                    }
+
+                    if (obj == null)
+                        continue;
+
+                    IServiceResponse response = obj as IServiceResponse;
+                    if (response != null)
+                    {
+                        try
+                        {
+                            JsonFormatter.Instance.Format(client.GetStream(), response);
+                        }
+                        catch (Exception e)
+                        {
+                            worker._channel.RemoveWorker(worker, e);
+                            break;
+                        }
+                        continue;
+                    }
+
+                    IServiceRequest request = obj as IServiceRequest;
+                    if (request != null)
+                    {
+                        try
+                        {
+                            JsonFormatter.Instance.Format(client.GetStream(), request);
+                        }
+                        catch (Exception e)
+                        {
+                            worker._channel.RemoveWorker(worker, e);
+                            WaitFuture<IServiceRequest, IServiceResponse> wf;
+                            if (request.Token != null &&
+                                worker._channel._waitingRequests.TryRemove(request.Token, out wf))
+                                wf.Response = null;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            private static void Receiving(Object state)
+            {
+                Worker worker = (Worker)state;
+                TcpClient client = worker._client;
+                Int32 counter = 0;
+                Byte[] byteBuffer = new Byte[1024];
+                IoBuffer ioBuffer = IoBuffer.Allocate(2048);
+                ioBuffer.AutoExpand = true;
+
+                while (client.Client != null && client.Connected)
+                {
+                    try
+                    {
+                        Int32 bytesRead = Math.Min(client.Available, byteBuffer.Length);
+                        bytesRead = client.Client.Receive(byteBuffer, 0, bytesRead, SocketFlags.None);
+                        for (Int32 i = 0; i < bytesRead; i++)
+                        {
+                            ioBuffer.Put(byteBuffer[i]);
+
+                            if ('{' == byteBuffer[i])
+                            {
+                                counter++;
+                            }
+                            else if ('}' == byteBuffer[i])
+                            {
+                                counter--;
+
+                                if (counter == 0)
+                                {
+                                    ioBuffer.Flip();
+                                    ArraySegment<Byte> array = ioBuffer.GetRemaining();
+                                    String json = Encoding.UTF8.GetString(array.Array, array.Offset, array.Count);
+                                    JObject jObj = ToJsonObject(json);
+
+                                    if (jObj["status"] != null)
+                                        worker.ProcessResponse(new JsonResponse(jObj));
+                                    else if (jObj["method"] != null)
+                                        worker.ProcessRequest(new JsonRequest(jObj));
+
+                                    ioBuffer.Clear();
+                                }
+                            }
+                        }
+                    }
+                    catch (SocketException e)
+                    {
+                        worker._channel.RemoveWorker(worker, e);
+                    }
+                    catch (Exception e)
+                    {
+                        // TODO log exception
+                        Console.WriteLine(e.Message);
+                    }
+                }
+
+                if (!worker._disposed)
+                    worker._channel.RemoveWorker(worker, null);
             }
 
             private void ProcessResponse(IServiceResponse response)
@@ -378,14 +434,8 @@ namespace SmeshLink.Misty.Service.Channel
                 {
                     if (response.Token == null)
                         response.Token = request.Token;
-                    Send(response);
+                    _sendingQueue.Enqueue(response);
                 }
-            }
-
-            public void Dispose()
-            {
-                if (_client != null)
-                    ((IDisposable)_client).Dispose();
             }
         }
 
