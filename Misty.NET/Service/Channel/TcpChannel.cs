@@ -102,8 +102,12 @@ namespace SmeshLink.Misty.Service.Channel
 
             request.Headers["Content-Type"] = MistyService.GetContentType(request.Format);
             request.Headers["User-Agent"] = MistyService.Version;
-            WaitFuture<IServiceRequest, IServiceResponse> f = worker.Send(request);
+
+            WaitFuture<IServiceRequest, IServiceResponse> f = new WaitFuture<IServiceRequest, IServiceResponse>(request);
+            _waitingRequests[request.Token] = f;
+            worker.Send(request);
             worker.Free();
+
             f.Wait(_timeout);
             return f.Response;
         }
@@ -194,7 +198,7 @@ namespace SmeshLink.Misty.Service.Channel
             }
         }
 
-        private void HandleResponse(IServiceResponse response)
+        private void ProcessResponse(IServiceResponse response)
         {
             if (response.Token != null)
             {
@@ -202,6 +206,22 @@ namespace SmeshLink.Misty.Service.Channel
                 if (_waitingRequests.TryRemove(response.Token, out f))
                     f.Response = response;
             }
+            //_channel.FireResponseReceived(response);
+        }
+
+        private void ProcessRequest(IServiceRequest request, Worker worker)
+        {
+            // avoid block
+            ThreadPool.QueueUserWorkItem(delegate(Object _)
+            {
+                IServiceResponse response = FireRequestReceived(request);
+                if (response != null)
+                {
+                    if (response.Token == null)
+                        response.Token = request.Token;
+                    worker.Send(response);
+                }
+            });
         }
 
         private IServiceResponse FireRequestReceived(IServiceRequest request)
@@ -298,12 +318,14 @@ namespace SmeshLink.Misty.Service.Channel
                 }
             }
 
-            public WaitFuture<IServiceRequest, IServiceResponse> Send(IServiceRequest request)
+            public void Send(IServiceRequest request)
             {
-                WaitFuture<IServiceRequest, IServiceResponse> wf = new WaitFuture<IServiceRequest, IServiceResponse>(request);
-                _channel._waitingRequests[request.Token] = wf;
-                _sendingQueue.Enqueue(wf.Request);
-                return wf;
+                _sendingQueue.Enqueue(request);
+            }
+
+            public void Send(IServiceResponse response)
+            {
+                _sendingQueue.Enqueue(response);
             }
 
             private static void Sending(Object state)
@@ -365,6 +387,7 @@ namespace SmeshLink.Misty.Service.Channel
             private static void Receiving(Object state)
             {
                 Worker worker = (Worker)state;
+                TcpChannel channel = worker._channel;
                 TcpClient client = worker._client;
                 Int32 counter = 0;
                 Byte[] byteBuffer = new Byte[1024];
@@ -397,9 +420,9 @@ namespace SmeshLink.Misty.Service.Channel
                                     JObject jObj = ToJsonObject(json);
 
                                     if (jObj["status"] != null)
-                                        worker.ProcessResponse(new JsonResponse(jObj));
+                                        channel.ProcessResponse(new JsonResponse(jObj));
                                     else if (jObj["method"] != null)
-                                        worker.ProcessRequest(new JsonRequest(jObj));
+                                        channel.ProcessRequest(new JsonRequest(jObj), worker);
 
                                     ioBuffer.Clear();
                                 }
@@ -408,7 +431,7 @@ namespace SmeshLink.Misty.Service.Channel
                     }
                     catch (SocketException e)
                     {
-                        worker._channel.RemoveWorker(worker, e);
+                        channel.RemoveWorker(worker, e);
                     }
                     catch (Exception e)
                     {
@@ -418,24 +441,7 @@ namespace SmeshLink.Misty.Service.Channel
                 }
 
                 if (!worker._disposed)
-                    worker._channel.RemoveWorker(worker, null);
-            }
-
-            private void ProcessResponse(IServiceResponse response)
-            {
-                _channel.HandleResponse(response);
-                //_channel.FireResponseReceived(response);
-            }
-
-            private void ProcessRequest(IServiceRequest request)
-            {
-                IServiceResponse response = _channel.FireRequestReceived(request);
-                if (response != null)
-                {
-                    if (response.Token == null)
-                        response.Token = request.Token;
-                    _sendingQueue.Enqueue(response);
-                }
+                    channel.RemoveWorker(worker, null);
             }
         }
 
