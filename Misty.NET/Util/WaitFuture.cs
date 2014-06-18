@@ -42,14 +42,16 @@ namespace SmeshLink.Misty.Util
             }
         }
 
-        public void Wait()
+        public WaitFuture<TRequest, TResponse> Wait()
         {
             _mre.WaitOne();
+            return this;
         }
 
-        public void Wait(Int32 millisecondsTimeout)
+        public WaitFuture<TRequest, TResponse> Wait(Int32 millisecondsTimeout)
         {
             _mre.WaitOne(millisecondsTimeout);
+            return this;
         }
 
         public void Dispose()

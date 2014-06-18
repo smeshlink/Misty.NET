@@ -103,13 +103,14 @@ namespace SmeshLink.Misty.Service.Channel
             request.Headers["Content-Type"] = MistyService.GetContentType(request.Format);
             request.Headers["User-Agent"] = MistyService.Version;
 
-            WaitFuture<IServiceRequest, IServiceResponse> f = new WaitFuture<IServiceRequest, IServiceResponse>(request);
-            _waitingRequests[request.Token] = f;
-            worker.Send(request);
-            worker.Free();
-
-            f.Wait(_timeout);
-            return f.Response;
+            try
+            {
+                return worker.Send(request).Wait(_timeout).Response;
+            }
+            finally
+            {
+                worker.Free();
+            }
         }
 
         /// <summary>
@@ -318,9 +319,12 @@ namespace SmeshLink.Misty.Service.Channel
                 }
             }
 
-            public void Send(IServiceRequest request)
+            public WaitFuture<IServiceRequest, IServiceResponse> Send(IServiceRequest request)
             {
+                WaitFuture<IServiceRequest, IServiceResponse> wf = new WaitFuture<IServiceRequest, IServiceResponse>(request);
+                _channel._waitingRequests[request.Token] = wf;
                 _sendingQueue.Enqueue(request);
+                return wf;
             }
 
             public void Send(IServiceResponse response)
