@@ -70,6 +70,7 @@
     <Compile Include="Service\QueryOption.cs" />
     <Compile Include="Service\ServiceException.cs" />
     <Compile Include="Service\UserCredential.cs" />
+    <Compile Include="Util\BlockingQueue.cs" />
     <Compile Include="Util\Buffer\AbstractIoBuffer.cs" />
     <Compile Include="Util\Buffer\Buffer.cs" />
     <Compile Include="Util\Buffer\BufferDataException.cs" />
