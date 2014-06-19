@@ -33,10 +33,10 @@ namespace SmeshLink.Misty.Service.Channel
         private Int32 _port = 9011;
         private Int32 _timeout = 30000;
         private Int32 _retryInterval = 10000;
-        private Int32 _maxWorkers = 1;
+        private Int32 _maxWorkers;
         private readonly ConcurrentDictionary<String, WaitFuture<IServiceRequest, IServiceResponse>> _waitingRequests
             = new ConcurrentDictionary<String, WaitFuture<IServiceRequest, IServiceResponse>>();
-        private readonly List<Worker> _workerPool = new List<Worker>();
+        private IWorkerPool _workerPool;
         private Boolean _disposed;
 
         /// <inheritdoc/>
@@ -47,6 +47,7 @@ namespace SmeshLink.Misty.Service.Channel
         public TcpChannel(String host)
         {
             _host = host;
+            MaxWorkers = 1;
         }
 
         /// <summary>
@@ -89,13 +90,30 @@ namespace SmeshLink.Misty.Service.Channel
         public Int32 MaxWorkers
         {
             get { return _maxWorkers; }
-            set { _maxWorkers = value; }
+            set
+            {
+                if (_maxWorkers != value)
+                {
+                    if (_maxWorkers == 1 || value == 1)
+                    {
+                        if (_workerPool != null)
+                            _workerPool.Dispose();
+
+                        if (value == 1)
+                            _workerPool = new SingleWorkerPool(this);
+                        else
+                            _workerPool = new DefaultWorkerPool(this);
+                    }
+
+                    _maxWorkers = value;
+                }
+            }
         }
 
         /// <inheritdoc/>
         public IServiceResponse Execute(IServiceRequest request)
         {
-            Worker worker = GetWorker();
+            Worker worker = _workerPool.GetWorker();
             
             if (worker == null)
                 return null;
@@ -132,71 +150,10 @@ namespace SmeshLink.Misty.Service.Channel
 
             if (disposing)
             {
-                _workerPool.ForEach(w => w.Dispose());
+                _workerPool.Dispose();
             }
 
             _disposed = true;
-        }
-
-        private Worker GetWorker()
-        {
-            lock (_workerPool)
-            {
-                for (; ; )
-                {
-                    foreach (Worker w in _workerPool)
-                    {
-                        if (w.Available)
-                        {
-                            w.Take();
-                            return w;
-                        }
-                    }
-
-                    if (_workerPool.Count < _maxWorkers)
-                    {
-                        Worker w = new Worker(this);
-                        _workerPool.Add(w);
-                        ThreadPool.QueueUserWorkItem(w.Run);
-                    }
-
-                    try
-                    {
-                        Monitor.Wait(_workerPool, 3000);
-                    }
-                    catch (ThreadInterruptedException)
-                    {
-                        break;
-                    }
-                }
-            }
-            return null;
-        }
-
-        private void RemoveWorker(Worker w, Exception e)
-        {
-            if (e != null)
-                Console.WriteLine("Removing worker " + e.Message);
-
-            lock (_workerPool)
-            {
-                _workerPool.Remove(w);
-            }
-
-            try
-            {
-                w.Dispose();
-            }
-            catch
-            { /* ignore */ }
-        }
-
-        private void Wakeup()
-        {
-            lock (_workerPool)
-            {
-                Monitor.PulseAll(_workerPool);
-            }
         }
 
         private void ProcessResponse(IServiceResponse response)
@@ -240,22 +197,190 @@ namespace SmeshLink.Misty.Service.Channel
             return null;
         }
 
+        interface IWorkerPool : IDisposable
+        {
+            Worker GetWorker();
+            void HandleException(Worker w, Exception e);
+            void Wakeup();
+        }
+
+        class SingleWorkerPool : IWorkerPool
+        {
+            readonly TcpChannel _channel;
+            Worker _worker;
+
+            public SingleWorkerPool(TcpChannel channel)
+            {
+                _channel = channel;
+            }
+
+            public Worker GetWorker()
+            {
+                Worker w = _worker;
+                if (w == null)
+                {
+                    lock (this)
+                    {
+                        if (_worker == null)
+                        {
+                            _worker = new Worker(this, _channel);
+                            _worker.RunAsync();
+                        }
+                        w = _worker;
+                    }
+                }
+
+                while (!w.TryTake())
+                {
+                    Thread.Sleep(1);
+                }
+                return w;
+            }
+
+            public void HandleException(Worker w, Exception e)
+            {
+                if (e != null)
+                {
+                    Console.WriteLine("Removing worker " + e.Message);
+
+                    SocketException se = e as SocketException;
+                    if (se == null)
+                        return;
+                }
+             
+                lock (this)
+                {
+                    _worker = null;
+                }
+
+                try
+                {
+                    w.Dispose();
+                }
+                catch
+                { /* ignore */ }
+            }
+
+            public void Wakeup()
+            {
+                // do nothing
+            }
+
+            public void Dispose()
+            {
+                Worker w = _worker;
+                if (w != null)
+                    w.Dispose();
+            }
+        }
+
+        class DefaultWorkerPool : IWorkerPool
+        {
+            readonly TcpChannel _channel;
+            readonly List<Worker> _workerPool = new List<Worker>();
+
+            public DefaultWorkerPool(TcpChannel channel)
+            {
+                _channel = channel;
+            }
+
+            public Worker GetWorker()
+            {
+                lock (_workerPool)
+                {
+                    for (; ; )
+                    {
+                        foreach (Worker w in _workerPool)
+                        {
+                            if (w.Available)
+                            {
+                                w.Take();
+                                return w;
+                            }
+                        }
+
+                        if (_workerPool.Count < _channel._maxWorkers)
+                        {
+                            Worker w = new Worker(this, _channel);
+                            _workerPool.Add(w);
+                            w.RunAsync();
+                        }
+
+                        try
+                        {
+                            Monitor.Wait(_workerPool, 3000);
+                        }
+                        catch (ThreadInterruptedException)
+                        {
+                            break;
+                        }
+                    }
+                }
+                return null;
+            }
+
+            public void HandleException(Worker w, Exception e)
+            {
+                if (e != null)
+                {
+                    Console.WriteLine("Removing worker " + e.Message);
+
+                    SocketException se = e as SocketException;
+                    if (se == null)
+                        return;
+                }
+
+                lock (_workerPool)
+                {
+                    _workerPool.Remove(w);
+                }
+
+                try
+                {
+                    w.Dispose();
+                }
+                catch
+                { /* ignore */ }
+            }
+
+            public void Wakeup()
+            {
+                lock (_workerPool)
+                {
+                    Monitor.PulseAll(_workerPool);
+                }
+            }
+
+            public void Dispose()
+            {
+                _workerPool.ForEach(w => w.Dispose());
+                _workerPool.Clear();
+            }
+        }
+
         class Worker : IDisposable
         {
+            readonly IWorkerPool _pool;
             readonly TcpChannel _channel;
             readonly BlockingQueue<Object> _sendingQueue = new BlockingQueue<Object>();
             TcpClient _client;
-            Boolean _free = true;
+            Int32 _state = -1;
             Boolean _disposed;
 
-            public Worker(TcpChannel channel)
+            public Worker(IWorkerPool pool, TcpChannel channel)
             {
+                _pool = pool;
                 _channel = channel;
             }
 
             public Boolean Available
             {
-                get { return _free && _client != null && _client.Client != null && _client.Connected; }
+                get { return _state == 0 && _client != null && _client.Client != null && _client.Connected; }
+            }
+
+            public void RunAsync()
+            {
+                ThreadPool.QueueUserWorkItem(Run);
             }
 
             public void Run(Object state)
@@ -291,22 +416,26 @@ namespace SmeshLink.Misty.Service.Channel
                 if (_client == null)
                     return;
 
-                _channel.Wakeup();
                 Free();
 
                 ThreadPool.QueueUserWorkItem(Sending, this);
                 ThreadPool.QueueUserWorkItem(Receiving, this);
             }
 
+            public Boolean TryTake()
+            {
+                return Interlocked.CompareExchange(ref _state, 1, 0) == 0;
+            }
+
             public void Take()
             {
-                _free = false;
+                _state = 1;
             }
 
             public void Free()
             {
-                _free = true;
-                _channel.Wakeup();
+                _state = 0;
+                _pool.Wakeup();
             }
 
             public void Dispose()
@@ -362,7 +491,7 @@ namespace SmeshLink.Misty.Service.Channel
                         }
                         catch (Exception e)
                         {
-                            worker._channel.RemoveWorker(worker, e);
+                            worker._pool.HandleException(worker, e);
                             break;
                         }
                         continue;
@@ -377,7 +506,7 @@ namespace SmeshLink.Misty.Service.Channel
                         }
                         catch (Exception e)
                         {
-                            worker._channel.RemoveWorker(worker, e);
+                            worker._pool.HandleException(worker, e);
                             WaitFuture<IServiceRequest, IServiceResponse> wf;
                             if (request.Token != null &&
                                 worker._channel._waitingRequests.TryRemove(request.Token, out wf))
@@ -404,6 +533,11 @@ namespace SmeshLink.Misty.Service.Channel
                     {
                         Int32 bytesRead = Math.Min(client.Available, byteBuffer.Length);
                         bytesRead = client.Client.Receive(byteBuffer, 0, bytesRead, SocketFlags.None);
+                        
+                        if (bytesRead == 0 && client.Available == 0)
+                            // client disconnects
+                            break;
+
                         for (Int32 i = 0; i < bytesRead; i++)
                         {
                             ioBuffer.Put(byteBuffer[i]);
@@ -435,7 +569,8 @@ namespace SmeshLink.Misty.Service.Channel
                     }
                     catch (SocketException e)
                     {
-                        channel.RemoveWorker(worker, e);
+                        worker._pool.HandleException(worker, e);
+                        return;
                     }
                     catch (Exception e)
                     {
@@ -445,7 +580,7 @@ namespace SmeshLink.Misty.Service.Channel
                 }
 
                 if (!worker._disposed)
-                    channel.RemoveWorker(worker, null);
+                    worker._pool.HandleException(worker, null);
             }
         }
 
