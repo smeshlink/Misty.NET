@@ -69,6 +69,7 @@
     <Compile Include="Service\IFeedService.cs" />
     <Compile Include="Service\QueryOption.cs" />
     <Compile Include="Service\ServiceException.cs" />
+    <Compile Include="Service\ServiceRequestImpl.cs" />
     <Compile Include="Service\UserCredential.cs" />
     <Compile Include="Util\BlockingQueue.cs" />
     <Compile Include="Util\Buffer\AbstractIoBuffer.cs" />
