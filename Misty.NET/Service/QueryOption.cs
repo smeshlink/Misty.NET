@@ -36,6 +36,7 @@ namespace SmeshLink.Misty.Service
         private QuerySample _sample;
         private QueryView _view;
         private FeedStatus? _status;
+        private Int32 _depth = -1;
 
         /// <summary>
         /// Gets or sets the start position.
@@ -134,6 +135,12 @@ namespace SmeshLink.Misty.Service
         {
             get { return _hidden; }
             set { _hidden = value; }
+        }
+
+        public Int32 Depth
+        {
+            get { return _depth; }
+            set { _depth = value; }
         }
     }
 

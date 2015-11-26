@@ -173,6 +173,8 @@ namespace SmeshLink.Misty.Service
                 request.Parameters["order"] = opt.Order;
             if (opt.Desc)
                 request.Parameters["desc"] = opt.Desc;
+            if (opt.Depth >= 0)
+                request.Parameters["depth"] = opt.Depth;
 
             if (opt.Content != QueryContent.Whatever)
                 request.Parameters["content"] = opt.Content;

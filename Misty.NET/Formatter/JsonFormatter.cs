@@ -584,6 +584,24 @@ namespace SmeshLink.Misty.Formatter
                     jw.WriteEndObject();
                 }
 
+                IEnumerable<KeyValuePair<String, Object>> ps = request.Parameters;
+                if (ps != null)
+                {
+                    using (IEnumerator<KeyValuePair<String, Object>> it = ps.GetEnumerator())
+                    {
+                        if (it.MoveNext())
+                        {
+                            jw.WritePropertyName("params");
+                            jw.WriteStartObject();
+                            do
+                            {
+                                WriteValue(jw, it.Current.Key, it.Current.Value);
+                            } while (it.MoveNext());
+                            jw.WriteEndObject();
+                        }
+                    }
+                }
+
                 Object body = request.Body;
                 if (body != null)
                 {
