@@ -46,7 +46,7 @@ namespace SmeshLink.Misty.Service.Channel
         /// </summary>
         public TcpChannel(String host)
         {
-            _host = host;
+            Host = host;
             MaxWorkers = 1;
         }
 
@@ -56,7 +56,22 @@ namespace SmeshLink.Misty.Service.Channel
         public String Host
         {
             get { return _host; }
-            set { _host = value; }
+            set
+            {
+                if (value == null)
+                    throw new ArgumentNullException("value");
+
+                Int32 index = value.IndexOf(':');
+                if (index < 0)
+                {
+                    _host = value;
+                }
+                else
+                {
+                    _host = value.Substring(0, index);
+                    _port = Int32.Parse(value.Substring(index + 1));
+                }
+            }
         }
 
         /// <summary>
@@ -118,7 +133,8 @@ namespace SmeshLink.Misty.Service.Channel
             if (worker == null)
                 return null;
 
-            request.Headers["Content-Type"] = MistyService.GetContentType(request.Format);
+            if (request.Body != null)
+                request.Headers["Content-Type"] = MistyService.GetContentType(request.Format);
             request.Headers["User-Agent"] = MistyService.Version;
 
             try
